@@ -442,8 +442,8 @@ function demoState(){
   s.times = Object.assign({}, DEFAULT_TIMES, {'3':['00:00','23:59']});
   return s;
 }
-/* ---------- 端末をまたいだ保存（1日＝1文書、保存先は本人のGoogleスプレッドシート） ---------- */
-const API = '__API_URL__';
+/* ---------- 端末をまたいだ保存（1日＝1文書、保存先は本人のGoogle Apps Script） ---------- */
+const API = 'https://script.google.com/macros/s/AKfycbxIjVKKGgfXVY6rfaYp1aoK3QsVRFE6s2S3JgjLjqX5ixHBLA5lAd2hxXwlYW4ma7-n/exec';
 const PASS_KEY = 'dailyBoard.pass', CACHE_KEY = 'dailyBoard.cache';
 const store = {
   get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
@@ -503,8 +503,8 @@ async function flush(){
   if(failed && (failed.code === 'bad_pass' || failed.code === 'locked')){ authFail(failed.code); return; }
   if(failed){
     setSync('保存できていません', 'bad');
-    toast('保存できませんでした。通信を確認してください');
-    if(!flushT) flushT = setTimeout(flush, 15000);
+    toast(failed.code === 'full' ? '保存できませんでした。メモが長すぎるか、保存できる量の上限です' : '保存できませんでした。通信を確認してください');
+    if(failed.code !== 'full' && !flushT) flushT = setTimeout(flush, 15000);
   }else if(!flushT){
     setSync('保存済み');
   }
