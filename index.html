@@ -145,7 +145,20 @@ header{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;paddin
 
 /* レイアウト */
 main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(320px,36fr) 64fr;gap:var(--gap);padding:0 18px 18px}
-.col{display:grid;grid-template-rows:1.1fr 1fr;gap:calc(var(--gap) + 4px);min-height:0}
+.col{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1.1fr 1fr;gap:calc(var(--gap) + 4px);min-height:0}
+.col>*{min-width:0;min-height:0}
+#memoPanel{grid-column:1/-1}
+#prepClasses{display:flex;flex-wrap:wrap;gap:2px 12px;padding:8px 18px 2px;font-size:15px;color:var(--sub)}
+#prepClasses b{margin-right:4px;font-weight:700}
+#prepList{list-style:none;margin:0;padding:4px 14px;overflow-y:auto;flex:1;min-height:0}
+#prepList li{display:flex;align-items:center;gap:10px;padding:3px 6px;border-radius:6px;font-size:19px}
+#prepList li input{width:20px;height:20px;accent-color:var(--check);flex:none;cursor:pointer;margin:0}
+#prepList .txt{flex:1;min-width:0;overflow-wrap:anywhere}
+#prepList li.done .txt{text-decoration:line-through;color:var(--done)}
+#prepList .del{border:0;background:none;color:var(--sub);padding:0 4px;font-size:20px}
+#prepForm{display:flex;gap:6px;padding:4px 14px 12px}
+#prepForm input{flex:1;min-width:0;padding:6px 10px;font-size:16px;border:1px solid var(--frame);border-radius:8px;background:transparent;color:inherit}
+#prepForm button{flex:none;padding:6px 12px;font-size:15px;border:1px solid var(--frame);border-radius:8px;background:none;color:inherit}
 
 /* 時間割 */
 #table{display:grid;grid-template-columns:62px minmax(70px,104px) 1fr;grid-template-rows:repeat(10,1fr);
@@ -235,7 +248,7 @@ dialog input[type=text],dialog select,dialog input[type=time]{border:1px solid #
   #clock,.title,.tools{grid-column:1;justify-self:center}
   main{grid-template-columns:1fr}
   #table{height:640px}
-  .col{grid-template-rows:auto auto}
+  .col{grid-template-columns:1fr;grid-template-rows:auto auto auto}
   #todoPanel{min-height:300px}
   #memoPanel{min-height:240px}
 }
@@ -341,6 +354,12 @@ header,main{touch-action:pan-y pinch-zoom}
     <section class="panel" id="todoPanel">
       <h2>Todo <small id="progress"></small></h2>
       <ul id="todoList"></ul>
+    </section>
+    <section class="panel" id="prepPanel">
+      <h2>明日の準備 <small id="prepFor"></small></h2>
+      <div id="prepClasses"></div>
+      <ul id="prepList"></ul>
+      <form id="prepForm"><input id="prepIn" type="text" maxlength="80" placeholder="準備することを入力" autocomplete="off" aria-label="準備することを入力"><button type="submit">追加</button></form>
     </section>
     <section class="panel" id="memoPanel">
       <h2>メモ</h2>
@@ -478,7 +497,7 @@ let linked = false, flushT = null, inFlight = false, rerun = false, pendingRefre
 const synced = {days:{}, settings:null};
 const canon = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x)
   ? Object.fromEntries(Object.entries(x).sort(([a],[b]) => a < b ? -1 : a > b ? 1 : 0)) : x);
-const isEmpty = d => !Object.values(d.p).some(x => x.text || x.cls !== undefined) && !d.todos.length && !d.memo && !d.sheet && !(d.rep && d.rep.length);
+const isEmpty = d => !Object.values(d.p).some(x => x.text || x.cls !== undefined) && !d.todos.length && !d.memo && !d.sheet && !(d.rep && d.rep.length) && !(d.prep && d.prep.length);
 const dayCanon = k => { const d = state.days[k]; return d && !isEmpty(d) ? canon(d) : null; };
 const setCanon = () => canon({weekly:state.weekly, times:state.times, skin:state.skin, repeat:state.repeat, sheet:state.sheet});
 const dayDirty = k => dayCanon(k) !== (synced.days[k] ?? null);
@@ -530,6 +549,7 @@ function normalizeDay(x){
   const d = {p:x.p || {}, todos:x.todos || [], memo:x.memo || ''};
   if(x.sheet) d.sheet = x.sheet;       // 進度表から前回取り込んだ値（手入力と見分ける）
   if(x.rep && x.rep.length) d.rep = x.rep;   // この日に作り終えたくり返しTodo
+  if(x.prep && x.prep.length) d.prep = x.prep;   // この日のための前日の準備
   return d;
 }
 function editing(){
@@ -542,7 +562,7 @@ function refresh(){
   pendingRefresh = busy;
   if(document.querySelector('dialog[open]')) return;
   applySkin(state.skin);
-  renderHeader(); fillTable(true);
+  renderHeader(); fillTable(true); renderPrep();
   if(!busy || !list.contains(a)) renderTodos();
   if(a !== $('#memo')) $('#memo').value = day().memo;
 }
@@ -622,6 +642,15 @@ function carryOver(){
   if(!DEMO && !(gotDays && gotSettings && daysFresh)) return;
   if(document.hidden || Date.now() < carryWait || editing()) return;
   const tk = todayKey(), items = [];
+  let preps = 0;
+  for(const k of Object.keys(state.days).filter(k => k <= tk).sort()){   // その日が来ても終わっていない準備はTodoへ
+    const left = (state.days[k].prep || []).filter(t => !t.done);
+    if(!left.length) continue;
+    const to = day(tk);
+    state.days[k].prep = state.days[k].prep.filter(t => t.done);
+    for(const t of left) if(!to.todos.some(x => x.id === t.id)){ to.todos.push(t); preps++; }
+  }
+  if(preps){ save(); refresh(); toast(`終わっていない準備 ${preps}件をTodoに移しました`); }
   for(const k of Object.keys(state.days).filter(k => k < tk).sort())
     for(const t of state.days[k].todos) if(!t.done) items.push({k, t});
   if(!items.length) return;
@@ -914,6 +943,40 @@ function openSettings(){
 }
 $('#gearBtn').onclick = openSettings;
 
+/* ---------- 明日の準備（次の日のページに持たせる） ---------- */
+const prepList = $('#prepList');
+function renderPrep(){
+  const k = shift(cur, 1), d = parseKey(k), src = state.days[k], parts = [];
+  $('#prepFor').textContent = `${d.getMonth()+1}/${d.getDate()}（${WD[d.getDay()]}）`;
+  for(const p of PERIODS){
+    const c = src && src.p[p.id], cls = c && c.cls !== undefined ? c.cls : weeklyCls(p.id, k), text = (c && c.text) || '';
+    if(cls || text) parts.push(`<span><b>${p.label}</b>${esc([cls, text].filter(Boolean).join(' '))}</span>`);
+  }
+  $('#prepClasses').innerHTML = parts.join('') || '<span>授業なし</span>';
+  const items = (src && src.prep) || [];
+  prepList.innerHTML = [...items.filter(t => !t.done), ...items.filter(t => t.done)].map(t =>
+    `<li data-id="${esc(t.id)}" class="${t.done ? 'done' : ''}"><input type="checkbox" ${t.done ? 'checked' : ''} aria-label="完了"><span class="txt">${esc(t.text)}</span><button type="button" class="del" title="削除" aria-label="削除">×</button></li>`).join('');
+}
+$('#prepForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const v = $('#prepIn').value.trim();
+  if(!v) return;
+  const d = day(shift(cur, 1));
+  d.prep = [...(d.prep || []), {id:uid(), text:v, done:false}];
+  $('#prepIn').value = '';
+  save(); renderPrep();
+});
+prepList.addEventListener('change', e => {
+  const t = day(shift(cur, 1)).prep.find(x => x.id === e.target.closest('li').dataset.id);
+  if(t){ t.done = e.target.checked; save(); renderPrep(); }
+});
+prepList.addEventListener('click', e => {
+  if(!e.target.closest('.del')) return;
+  const d = day(shift(cur, 1));
+  d.prep = d.prep.filter(x => x.id !== e.target.closest('li').dataset.id);
+  save(); renderPrep();
+});
+
 /* ---------- くり返しTodo ---------- */
 const REP_DAYS = [[-1,'平日毎日'],[1,'月'],[2,'火'],[3,'水'],[4,'木'],[5,'金'],[6,'土'],[0,'日']];
 function addRepRow(r){
@@ -1118,7 +1181,7 @@ setDlg.addEventListener('close', () => {
 setDlg.addEventListener('close', () => { if(pendingRefresh) setTimeout(refresh, 60); });
 
 /* ---------- 日付移動 ---------- */
-function go(k){ cur = k; renderHeader(); fillTable(); renderTodos(); $('#memo').value = day().memo; }
+function go(k){ cur = k; renderHeader(); fillTable(); renderTodos(); renderPrep(); $('#memo').value = day().memo; }
 $('#prev').onclick = () => go(shift(cur, -1));
 $('#week').onclick = e => { const b = e.target.closest('button[data-k]'); if(b) go(b.dataset.k); };
 $('#next').onclick = () => go(shift(cur, 1));
