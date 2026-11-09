@@ -217,7 +217,14 @@ dialog input[type=text],dialog select,dialog input[type=time]{border:1px solid #
 .wk td.t input{width:84px}
 .wk td.na{background:#f6f5f2}
 .backup{display:flex;gap:8px;flex-wrap:wrap}
-.backup button{border:1px solid #ddd8ce;background:none;border-radius:8px;padding:6px 12px;font-size:14px}
+.backup button,#repAdd,#sheetNow{border:1px solid #ddd8ce;background:none;border-radius:8px;padding:6px 12px;font-size:14px;color:inherit}
+.rep{display:flex;flex-direction:column;gap:6px;min-width:0}
+.rep:has(#sheetUrl){flex-direction:row;flex-wrap:wrap}
+.repRow{display:flex;gap:6px;align-items:center;min-width:0}
+.repRow input,#sheetUrl{flex:1 1 12em;min-width:0;padding:6px 8px;font-size:16px}
+.repRow select{flex:0 0 6.2em;width:6.2em;padding:6px;font-size:16px}
+#sheetUrl{background:#f6f5f2;color:#1f2430;border:1px solid #ddd8ce;border-radius:8px}
+.repRow .del{border:none;background:none;font-size:18px;padding:4px 8px;color:inherit}
 
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1f2328;color:#fff;padding:8px 18px;border-radius:99px;font-size:15px;opacity:0;transition:opacity .25s;pointer-events:none}
 #toast.show{opacity:1}
@@ -381,6 +388,14 @@ header,main{touch-action:pan-y pinch-zoom}
     <h3>毎週の時間割と時刻</h3>
     <p class="note">ここに入れたクラスが、毎週その曜日に自動で表示されます。その日だけ変える時は、画面の時間割に直接入力してください（オレンジ色で「変更」と出ます）。時刻は、いまの時限に色をつけるのに使います。</p>
     <div style="overflow-x:auto"><table class="wk" id="wkTable"></table></div>
+    <h3>くり返しTodo</h3>
+    <p class="note">選んだ曜日になると、その日のTodoに自動で入ります。</p>
+    <div id="repList" class="rep"></div>
+    <button type="button" id="repAdd">＋ くり返しを追加</button>
+    <h3>進度表シートとの連動</h3>
+    <p class="note">GoogleシートのURLを入れると、今日以降の授業と学校予定を自動で取り込みます（5分おき）。画面で書きかえた欄は上書きしません。</p>
+    <div class="rep"><input type="url" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/…" autocomplete="off"><button type="button" id="sheetNow">今すぐ取り込む</button></div>
+    <p class="note" id="sheetMsg" role="status"></p>
     <div class="backup">
       <button type="button" id="exportBtn">💾 バックアップを保存</button>
       <button type="button" id="importBtn">📂 バックアップを読み込む</button>
@@ -427,6 +442,7 @@ function nowMin(){ const d = new Date(); return d.getHours()*60 + d.getMinutes()
 /* ---------- データ ---------- */
 function fix(s){
   s.days = s.days || {}; s.weekly = s.weekly || {}; s.times = Object.assign({}, DEFAULT_TIMES, s.times || {}); s.skin = s.skin || 'dark';
+  s.repeat = s.repeat || []; s.sheet = s.sheet || '';
   return s;
 }
 const DEMO = new URLSearchParams(location.search).has('demo');
@@ -462,9 +478,9 @@ let linked = false, flushT = null, inFlight = false, rerun = false, pendingRefre
 const synced = {days:{}, settings:null};
 const canon = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x)
   ? Object.fromEntries(Object.entries(x).sort(([a],[b]) => a < b ? -1 : a > b ? 1 : 0)) : x);
-const isEmpty = d => !Object.values(d.p).some(x => x.text || x.cls !== undefined) && !d.todos.length && !d.memo;
+const isEmpty = d => !Object.values(d.p).some(x => x.text || x.cls !== undefined) && !d.todos.length && !d.memo && !d.sheet && !(d.rep && d.rep.length);
 const dayCanon = k => { const d = state.days[k]; return d && !isEmpty(d) ? canon(d) : null; };
-const setCanon = () => canon({weekly:state.weekly, times:state.times, skin:state.skin});
+const setCanon = () => canon({weekly:state.weekly, times:state.times, skin:state.skin, repeat:state.repeat, sheet:state.sheet});
 const dayDirty = k => dayCanon(k) !== (synced.days[k] ?? null);
 function setSync(t, cls){ const e = $('#sync'); e.textContent = t; e.className = cls || ''; }
 function save(){
@@ -510,7 +526,12 @@ async function flush(){
   }
 }
 document.addEventListener('visibilitychange', () => { if(document.hidden && flushT){ clearTimeout(flushT); flush(); } });
-function normalizeDay(x){ return {p:x.p || {}, todos:x.todos || [], memo:x.memo || ''}; }
+function normalizeDay(x){
+  const d = {p:x.p || {}, todos:x.todos || [], memo:x.memo || ''};
+  if(x.sheet) d.sheet = x.sheet;       // 進度表から前回取り込んだ値（手入力と見分ける）
+  if(x.rep && x.rep.length) d.rep = x.rep;   // この日に作り終えたくり返しTodo
+  return d;
+}
 function editing(){
   const a = document.activeElement;
   return !!(document.querySelector('dialog[open]') || (a && (a.matches('input:not([type=checkbox]),textarea') || a.isContentEditable)));
@@ -532,10 +553,10 @@ function applyDocs(docs){
     if(d.key === 'settings/main'){
       if(!d.json) continue;
       const body = JSON.parse(d.json);
-      const c = canon({weekly:body.weekly || {}, times:Object.assign({}, DEFAULT_TIMES, body.times || {}), skin:body.skin || 'dark'});
+      const c = canon({weekly:body.weekly || {}, times:Object.assign({}, DEFAULT_TIMES, body.times || {}), skin:body.skin || 'dark', repeat:body.repeat || [], sheet:body.sheet || ''});
       if(!gotSettings || setCanon() === synced.settings){
         synced.settings = c;
-        if(c !== setCanon()){ const v = JSON.parse(c); state.weekly = v.weekly; state.times = v.times; state.skin = v.skin; changed = true; }
+        if(c !== setCanon()){ const v = JSON.parse(c); Object.assign(state, {weekly:v.weekly, times:v.times, skin:v.skin, repeat:v.repeat, sheet:v.sheet}); changed = true; }
       }
       continue;
     }
@@ -558,7 +579,11 @@ function loadCache(){
     if(!c || !c.days) return;
     rev = c.rev; synced.days = c.days; synced.settings = c.settings;
     for(const k in c.days) state.days[k] = JSON.parse(c.days[k]);
-    if(c.settings){ const v = JSON.parse(c.settings); state.weekly = v.weekly; state.times = v.times; state.skin = v.skin; }
+    if(c.settings){
+      const v = JSON.parse(c.settings);
+      Object.assign(state, {weekly:v.weekly, times:v.times, skin:v.skin, repeat:v.repeat || [], sheet:v.sheet || ''});
+      synced.settings = setCanon();   // 項目が増える前の控えを「未保存の変更」と誤解しない
+    }
     gotDays = gotSettings = true;
   }catch(e){ rev = 0; synced.days = {}; synced.settings = null; state = fix({}); }
 }
@@ -880,10 +905,174 @@ function openSettings(){
     h += '</tr>';
   }
   $('#wkTable').innerHTML = h;
+  $('#repList').innerHTML = '';
+  state.repeat.forEach(addRepRow);
+  $('#sheetUrl').value = state.sheet;
+  $('#sheetMsg').textContent = sheetNote;
   setDlg.returnValue = '';
   setDlg.showModal();
 }
 $('#gearBtn').onclick = openSettings;
+
+/* ---------- くり返しTodo ---------- */
+const REP_DAYS = [[-1,'平日毎日'],[1,'月'],[2,'火'],[3,'水'],[4,'木'],[5,'金'],[6,'土'],[0,'日']];
+function addRepRow(r){
+  const row = document.createElement('div');
+  row.className = 'repRow';
+  row.dataset.id = r.id;
+  row.innerHTML = `<select aria-label="曜日">${REP_DAYS.map(([v, n]) => `<option value="${v}" ${v === r.dow ? 'selected' : ''}>${n}</option>`).join('')}</select><input type="text" maxlength="60" placeholder="やること（例：週末課題作成）" value="${esc(r.text)}"><button type="button" class="del" title="削除" aria-label="削除">×</button>`;
+  $('#repList').appendChild(row);
+  return row;
+}
+$('#repAdd').onclick = () => addRepRow({id:uid(), dow:new Date().getDay() === 0 ? 1 : new Date().getDay(), text:''}).querySelector('input').focus();
+$('#repList').addEventListener('click', e => { if(e.target.closest('.del')) e.target.closest('.repRow').remove(); });
+function genRepeats(){
+  if(!DEMO && !(gotDays && gotSettings && daysFresh)) return;
+  if(document.hidden || Date.now() < carryWait || editing()) return;
+  const tk = todayKey(), w = parseKey(tk).getDay();
+  const rules = state.repeat.filter(r => r.dow === w || (r.dow === -1 && w >= 1 && w <= 5));
+  const d = day(tk), newRules = rules.filter(r => !(d.rep || []).includes(r.id));
+  if(!newRules.length) return;
+  let n = 0;
+  d.rep = [...(d.rep || []), ...newRules.map(r => r.id)];   // 消したTodoが作り直されないよう、作った印を残す
+  for(const r of newRules){
+    if(d.todos.some(t => !t.done && t.text === r.text)) continue;   // 持ち越し分と二重にしない
+    d.todos.push({id:'r' + r.id + tk.replace(/-/g, ''), text:r.text, done:false});
+    n++;
+  }
+  save(); refresh();
+  if(n) toast(`くり返しTodoを ${n}件 入れました`);
+}
+
+/* ---------- 進度表シートとの連動 ---------- */
+/* sheet:begin */
+function parseCsv(t){
+  const rows = []; let row = [], f = '', q = false;
+  for(let i = 0; i < t.length; i++){
+    const c = t[i];
+    if(q){
+      if(c === '"' && t[i+1] === '"'){ f += '"'; i++; }
+      else if(c === '"') q = false;
+      else f += c;
+    }else if(c === '"') q = true;
+    else if(c === ','){ row.push(f); f = ''; }
+    else if(c === '\n'){ row.push(f); rows.push(row); row = []; f = ''; }
+    else if(c !== '\r') f += c;
+  }
+  if(f || row.length){ row.push(f); rows.push(row); }
+  return rows;
+}
+/* シートを {日付:{p:{時限:{cls?,text}}, memo}} にする。列は見出しで探す */
+function parseSheet(csv, weekly, now){
+  const rows = parseCsv(csv);
+  if(!rows.length) return null;
+  const head = rows[0].map(x => x.normalize('NFKC').trim());
+  const cols = [];
+  head.forEach((h, i) => { if(/^\d-[A-Za-z]$/.test(h)) cols.push([i, h.replace('-', '')]); });
+  const memoCol = head.indexOf('変更');
+  if(!cols.length || memoCol < 0) return null;
+  const classes = new Set(cols.map(c => c[1]));
+  const y0 = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const out = {};
+  for(const r of rows.slice(1)){
+    const m = Number(r[0]), d = Number(r[1]);
+    if(!m || !d) continue;
+    const y = m >= 4 ? y0 : y0 + 1, p = {};
+    for(const [i, cls] of cols){
+      const raw = (r[i] || '').trim(), hit = raw.normalize('NFKC').match(/^([1-7])限/);
+      if(!hit) continue;   // 数字だけ・メモ書きの欄は授業ではない
+      const text = raw.replace(/^([1-7１-７]限)+\s*/, '').replace(/^[(（]([\s\S]*)[)）]$/, '$1').trim();
+      p[hit[1]] = {cls, text};
+    }
+    const wk = weekly[new Date(y, m-1, d).getDay()] || {}, noLessons = !Object.keys(p).length;
+    for(const id of ['1','2','3','4','5','6','7']){
+      if(p[id]){ if(p[id].cls === wk[id]) delete p[id].cls; }
+      else if(classes.has(wk[id]) || (noLessons && wk[id])) p[id] = {cls:'', text:''};   // いつもの授業が進度表にない＝その日はなし
+    }
+    out[`${y}-${pad(m)}-${pad(d)}`] = {p, memo:(r[memoCol] || '').split('\n').map(s => s.trim()).join('\n').trim()};
+  }
+  return out;
+}
+/* 前回取り込んだ値と同じ欄だけ更新する（画面で書きかえた欄は残す）。{changed, kept} を返す */
+function mergeSheet(day, des){
+  const base = day.sheet, res = {changed:0, kept:0};
+  for(const id of ['1','2','3','4','5','6','7']){
+    const d = des.p[id] || {text:''}, b = base ? (base.p[id] || {text:''}) : null, c = day.p[id] || {};
+    let text = c.text || '', cls = c.cls;
+    if(text !== d.text){
+      if(b ? text === (b.text || '') : text === ''){ text = d.text; res.changed++; }
+      else if(!b || (b.text || '') !== d.text) res.kept++;
+    }
+    if(cls !== d.cls){
+      if(b ? cls === b.cls : cls === undefined){ cls = d.cls; res.changed++; }
+      else if(!b || b.cls !== d.cls) res.kept++;
+    }
+    if(text || cls !== undefined){ const n = {text}; if(cls !== undefined) n.cls = cls; day.p[id] = n; }
+    else delete day.p[id];
+  }
+  const was = base ? base.memo : null;
+  if(was !== des.memo){
+    const memo = day.memo || '', at = was ? memo.indexOf(was) : -1;   // 学校予定は複数行のこともある
+    if(at >= 0){
+      const next = memo.slice(0, at) + des.memo + memo.slice(at + was.length);
+      day.memo = des.memo ? next : next.replace(/\n{2,}/g, '\n').replace(/^\n|\n$/g, '');
+      res.changed++;
+    }else if(des.memo && !memo.includes(des.memo)){
+      if(base || !memo){ day.memo = memo ? des.memo + '\n' + memo : des.memo; res.changed++; }
+      else res.kept++;
+    }
+  }
+  day.sheet = {p:des.p, memo:des.memo};
+  return res;
+}
+/* sheet:end */
+function sheetCsvUrl(s){
+  const id = (s.match(/\/d\/([\w-]+)/) || [])[1] || (/^[\w-]{20,}$/.test(s) ? s : '');
+  if(!id) return '';
+  const gid = (s.match(/[#&?]gid=(\d+)/) || [])[1];
+  return `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv${gid ? '&gid=' + gid : ''}`;
+}
+let sheetNext = 0, sheetLast = '', sheetBusy = false, sheetNote = '';
+function setSheetNote(t){ sheetNote = t; $('#sheetMsg').textContent = t; }
+async function syncSheet(force, source){
+  const src = source ?? state.sheet;
+  if(DEMO || !linked || !src || sheetBusy) return;
+  if(!force && (!daysFresh || document.hidden || editing())) return;
+  const url = sheetCsvUrl(src);
+  if(!url){ setSheetNote('URLの形が正しくありません'); return; }
+  sheetBusy = true;
+  sheetNext = Date.now() + 300000;
+  try{
+    const r = await fetch(url, {cache:'no-store', signal:AbortSignal.timeout(25000)});
+    const csv = await r.text();
+    const all = r.ok ? parseSheet(csv, state.weekly, new Date()) : null;
+    if(!all) throw new Error('format');
+    if(csv !== sheetLast || force){
+      if(!force && editing()){ sheetBusy = false; sheetNext = 0; return; }
+      const tk = todayKey();
+      let changed = 0, kept = 0, touched = false;
+      for(const k of Object.keys(all).filter(k => k >= tk).sort()){
+        const des = all[k];
+        if(!state.days[k] && !des.memo && !Object.keys(des.p).length) continue;
+        const d = day(k), before = canon(d), res = mergeSheet(d, des);
+        changed += res.changed; kept += res.kept;
+        if(canon(d) !== before) touched = true;
+      }
+      if(touched){ save(); refresh(); }
+      sheetLast = csv;
+      setSheetNote(`${new Date().getHours()}:${pad(new Date().getMinutes())} に確認済み（反映 ${changed}か所${kept ? `／画面で変えた ${kept}か所はそのまま` : ''}）`);
+      if(changed) toast(`進度表の変更を ${changed}か所 反映しました`);
+      else if(force) toast('進度表を確認しました（変更なし）');
+    }else{
+      setSheetNote(`${new Date().getHours()}:${pad(new Date().getMinutes())} に確認済み（変更なし）`);
+    }
+  }catch(e){
+    setSheetNote('進度表を読めませんでした。URLと、シートの共有設定を確認してください');
+    if(force) toast('進度表を読めませんでした');
+  }
+  sheetBusy = false;
+}
+$('#sheetNow').onclick = () => syncSheet(true, $('#sheetUrl').value.trim());
 
 /* ---------- デザインの切りかえ ---------- */
 const THEMES = [
@@ -918,8 +1107,15 @@ setDlg.addEventListener('close', () => {
     const [id, i] = inp.dataset.t.split(':');
     if(inp.value) state.times[id][+i] = inp.value;
   }
+  state.repeat = [...$('#repList').querySelectorAll('.repRow')]
+    .map(row => ({id:row.dataset.id, dow:Number(row.querySelector('select').value), text:row.querySelector('input').value.trim()}))
+    .filter(r => r.text);
+  const sheet = $('#sheetUrl').value.trim();
+  if(sheet !== state.sheet){ state.sheet = sheet; sheetLast = ''; sheetNext = 0; }
   save(); fillTable(); toast('保存しました');
+  genRepeats();
 });
+setDlg.addEventListener('close', () => { if(pendingRefresh) setTimeout(refresh, 60); });
 
 /* ---------- 日付移動 ---------- */
 function go(k){ cur = k; renderHeader(); fillTable(); renderTodos(); $('#memo').value = day().memo; }
@@ -1048,6 +1244,8 @@ setInterval(() => {
     if(cur === old && !editing()) go(lastToday); else renderTodos();
   }
   carryOver();
+  genRepeats();
+  if(Date.now() >= sheetNext) syncSheet();
 }, 10000);
 
 go(cur);
