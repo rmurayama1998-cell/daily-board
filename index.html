@@ -516,10 +516,14 @@ function editing(){
   return !!(document.querySelector('dialog[open]') || (a && (a.matches('input:not([type=checkbox]),textarea') || a.isContentEditable)));
 }
 function refresh(){
-  if(editing()){ pendingRefresh = true; return; }
-  pendingRefresh = false;
+  // 入力中の欄だけ残して、ほかは他の端末の変更をすぐ出す
+  const a = document.activeElement, busy = editing();
+  pendingRefresh = busy;
+  if(document.querySelector('dialog[open]')) return;
   applySkin(state.skin);
-  renderHeader(); fillTable(); renderTodos(); $('#memo').value = day().memo;
+  renderHeader(); fillTable(true);
+  if(!busy || !list.contains(a)) renderTodos();
+  if(a !== $('#memo')) $('#memo').value = day().memo;
 }
 document.addEventListener('focusout', () => setTimeout(() => { if(pendingRefresh) refresh(); }, 60));
 function applyDocs(docs){
@@ -631,7 +635,7 @@ function connect(){
   else closeGate('データを読み込んでいます…');
   pull();
   clearInterval(pollT);
-  pollT = setInterval(() => { if(!document.hidden) pull(); }, 30000);
+  pollT = setInterval(() => { if(!document.hidden) pull(); }, 15000);
 }
 $('#passForm').addEventListener('submit', e => {
   e.preventDefault();
@@ -690,8 +694,9 @@ PERIODS.forEach((p, i) => {
       : `<div class="cls${last}" data-row="${p.id}"><input data-p="${p.id}" data-f="cls" maxlength="12"></div>` +
         `<div class="c3${last}" data-row="${p.id}"><input data-p="${p.id}" data-f="text"></div>`));
 });
-function fillTable(){
+function fillTable(keepFocused){
   for(const inp of table.querySelectorAll('input')){
+    if(keepFocused && inp === document.activeElement) continue;
     const id = inp.dataset.p;
     if(inp.dataset.f === 'cls'){
       inp.value = clsOf(id);
