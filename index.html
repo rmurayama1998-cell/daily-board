@@ -148,13 +148,15 @@ main{flex:1;min-height:0;display:grid;grid-template-columns:minmax(320px,36fr) 6
 .col{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1.1fr 1fr;gap:calc(var(--gap) + 4px);min-height:0}
 .col>*{min-width:0;min-height:0}
 #memoPanel{grid-column:1/-1}
-#prepClasses{display:flex;flex-wrap:wrap;gap:2px 12px;padding:8px 18px 2px;font-size:15px;color:var(--sub)}
-#prepClasses b{margin-right:4px;font-weight:700}
-#prepList{list-style:none;margin:0;padding:4px 14px;overflow-y:auto;flex:1;min-height:0}
-#prepList li{display:flex;align-items:center;gap:10px;padding:3px 6px;border-radius:6px;font-size:19px}
-#prepList li input{width:20px;height:20px;accent-color:var(--check);flex:none;cursor:pointer;margin:0}
-#prepList .txt{flex:1;min-width:0;overflow-wrap:anywhere}
-#prepList li.done .txt{text-decoration:line-through;color:var(--done)}
+#prepBody{flex:1;min-height:0;overflow-y:auto;padding:6px 14px 4px}
+#prepClasses,#prepList{list-style:none;margin:0;padding:0}
+#prepClasses:has(li)+#prepList:has(li){margin-top:6px;padding-top:6px;border-top:1px solid var(--frame)}
+#prepClasses li,#prepList li{display:flex;align-items:center;gap:10px;padding:3px 6px;border-radius:6px;font-size:19px}
+#prepClasses li.none{color:var(--sub);font-size:16px}
+#prepClasses li b{flex:none;min-width:1.2em;color:var(--sub);font-weight:700}
+#prepClasses li input,#prepList li input{width:20px;height:20px;accent-color:var(--check);flex:none;cursor:pointer;margin:0}
+#prepClasses .txt,#prepList .txt{flex:1;min-width:0;overflow-wrap:anywhere}
+#prepClasses li.done .txt,#prepList li.done .txt{text-decoration:line-through;color:var(--done)}
 #prepList .del{border:0;background:none;color:var(--sub);padding:0 4px;font-size:20px}
 #prepForm{display:flex;gap:6px;padding:4px 14px 12px}
 #prepForm input{flex:1;min-width:0;padding:6px 10px;font-size:16px;border:1px solid var(--frame);border-radius:8px;background:transparent;color:inherit}
@@ -357,8 +359,7 @@ header,main{touch-action:pan-y pinch-zoom}
     </section>
     <section class="panel" id="prepPanel">
       <h2>明日の準備 <small id="prepFor"></small></h2>
-      <div id="prepClasses"></div>
-      <ul id="prepList"></ul>
+      <div id="prepBody"><ul id="prepClasses"></ul><ul id="prepList"></ul></div>
       <form id="prepForm"><input id="prepIn" type="text" maxlength="80" placeholder="準備することを入力" autocomplete="off" aria-label="準備することを入力"><button type="submit">追加</button></form>
     </section>
     <section class="panel" id="memoPanel">
@@ -497,7 +498,7 @@ let linked = false, flushT = null, inFlight = false, rerun = false, pendingRefre
 const synced = {days:{}, settings:null};
 const canon = v => JSON.stringify(v, (k, x) => x && typeof x === 'object' && !Array.isArray(x)
   ? Object.fromEntries(Object.entries(x).sort(([a],[b]) => a < b ? -1 : a > b ? 1 : 0)) : x);
-const isEmpty = d => !Object.values(d.p).some(x => x.text || x.cls !== undefined) && !d.todos.length && !d.memo && !d.sheet && !(d.rep && d.rep.length) && !(d.prep && d.prep.length);
+const isEmpty = d => !Object.values(d.p).some(x => x.text || x.cls !== undefined) && !d.todos.length && !d.memo && !d.sheet && !(d.rep && d.rep.length) && !(d.prep && d.prep.length) && !(d.ready && Object.keys(d.ready).length);
 const dayCanon = k => { const d = state.days[k]; return d && !isEmpty(d) ? canon(d) : null; };
 const setCanon = () => canon({weekly:state.weekly, times:state.times, skin:state.skin, repeat:state.repeat, sheet:state.sheet});
 const dayDirty = k => dayCanon(k) !== (synced.days[k] ?? null);
@@ -550,6 +551,7 @@ function normalizeDay(x){
   if(x.sheet) d.sheet = x.sheet;       // 進度表から前回取り込んだ値（手入力と見分ける）
   if(x.rep && x.rep.length) d.rep = x.rep;   // この日に作り終えたくり返しTodo
   if(x.prep && x.prep.length) d.prep = x.prep;   // この日のための前日の準備
+  if(x.ready && Object.keys(x.ready).length) d.ready = x.ready;   // 授業ごとの「準備できた」印
   return d;
 }
 function editing(){
@@ -950,9 +952,11 @@ function renderPrep(){
   $('#prepFor').textContent = `${d.getMonth()+1}/${d.getDate()}（${WD[d.getDay()]}）`;
   for(const p of PERIODS){
     const c = src && src.p[p.id], cls = c && c.cls !== undefined ? c.cls : weeklyCls(p.id, k), text = (c && c.text) || '';
-    if(cls || text) parts.push(`<span><b>${p.label}</b>${esc([cls, text].filter(Boolean).join(' '))}</span>`);
+    if(!cls && !text) continue;
+    const ok = !!(src && src.ready && src.ready[p.id]);
+    parts.push(`<li data-p="${p.id}" class="${ok ? 'done' : ''}"><input type="checkbox" ${ok ? 'checked' : ''} aria-label="${p.label}の準備完了"><b>${p.label}</b><span class="txt">${esc([cls, text].filter(Boolean).join(' '))}</span></li>`);
   }
-  $('#prepClasses').innerHTML = parts.join('') || '<span>授業なし</span>';
+  $('#prepClasses').innerHTML = parts.join('') || '<li class="none">授業なし</li>';
   const items = (src && src.prep) || [];
   prepList.innerHTML = [...items.filter(t => !t.done), ...items.filter(t => t.done)].map(t =>
     `<li data-id="${esc(t.id)}" class="${t.done ? 'done' : ''}"><input type="checkbox" ${t.done ? 'checked' : ''} aria-label="完了"><span class="txt">${esc(t.text)}</span><button type="button" class="del" title="削除" aria-label="削除">×</button></li>`).join('');
@@ -964,6 +968,12 @@ $('#prepForm').addEventListener('submit', e => {
   const d = day(shift(cur, 1));
   d.prep = [...(d.prep || []), {id:uid(), text:v, done:false}];
   $('#prepIn').value = '';
+  save(); renderPrep();
+});
+$('#prepClasses').addEventListener('change', e => {
+  const d = day(shift(cur, 1)), id = e.target.closest('li').dataset.p, ready = Object.assign({}, d.ready);
+  if(e.target.checked) ready[id] = true; else delete ready[id];
+  if(Object.keys(ready).length) d.ready = ready; else delete d.ready;
   save(); renderPrep();
 });
 prepList.addEventListener('change', e => {
