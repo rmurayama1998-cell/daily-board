@@ -232,15 +232,13 @@ dialog input[type=text],dialog select,dialog input[type=time]{border:1px solid #
 .wk td.t input{width:84px}
 .wk td.na{background:#f6f5f2}
 .backup{display:flex;gap:8px;flex-wrap:wrap}
-.backup button,#repAdd,#sheetNow,#calNow{border:1px solid #ddd8ce;background:none;border-radius:8px;padding:6px 12px;font-size:14px;color:inherit}
+.backup button,#repAdd,#sheetNow{border:1px solid #ddd8ce;background:none;border-radius:8px;padding:6px 12px;font-size:14px;color:inherit}
 .rep{display:flex;flex-direction:column;gap:6px;min-width:0}
 .rep:has(#sheetUrl){flex-direction:row;flex-wrap:wrap}
 .repRow{display:flex;gap:6px;align-items:center;min-width:0}
 .repRow input,#sheetUrl{flex:1 1 12em;min-width:0;padding:6px 8px;font-size:16px}
 .repRow select{flex:0 0 6.2em;width:6.2em;padding:6px;font-size:16px}
-#sheetUrl,#calUrl{background:#f6f5f2;color:#1f2430;border:1px solid #ddd8ce;border-radius:8px}
-.rep:has(#calUrl){flex-direction:row;flex-wrap:wrap;align-items:flex-start}
-#calUrl{flex:1 1 12em;min-width:0;padding:6px 8px;font-size:14px;resize:vertical;word-break:break-all}
+#sheetUrl{background:#f6f5f2;color:#1f2430;border:1px solid #ddd8ce;border-radius:8px}
 .repRow .del{border:none;background:none;font-size:18px;padding:4px 8px;color:inherit}
 
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1f2328;color:#fff;padding:8px 18px;border-radius:99px;font-size:15px;opacity:0;transition:opacity .25s;pointer-events:none}
@@ -419,9 +417,7 @@ header,main{touch-action:pan-y pinch-zoom}
     <div class="rep"><input type="url" id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/…" autocomplete="off"><button type="button" id="sheetNow">今すぐ取り込む</button></div>
     <p class="note" id="sheetMsg" role="status"></p>
     <h3>Googleカレンダーとの連動</h3>
-    <p class="note">カレンダーの「iCal形式の非公開URL」を入れると、今日から60日分の予定を各日のメモの先頭に「📅 10:00 予定名」の形で取り込みます（10分おき）。カレンダーが複数あるときは1行に1つずつ。メモに書き足した部分は消しません。</p>
-    <div class="rep"><textarea id="calUrl" rows="2" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" autocomplete="off" spellcheck="false"></textarea><button type="button" id="calNow">今すぐ取り込む</button></div>
-    <p class="note" id="calMsg" role="status"></p>
+    <p class="note">GitHubの自動実行が30分おきにカレンダーを読み、今日から60日分の予定を各日のメモの先頭に「📅 10:00 予定名」の形で入れます。メモに書き足した部分は消しません。カレンダーのURLはGitHubの「Secrets」に登録します（このページでの設定はいりません）。</p>
     <div class="backup">
       <button type="button" id="exportBtn">💾 バックアップを保存</button>
       <button type="button" id="importBtn">📂 バックアップを読み込む</button>
@@ -946,8 +942,6 @@ function openSettings(){
   $('#repList').innerHTML = '';
   state.repeat.forEach(addRepRow);
   $('#sheetUrl').value = state.sheet;
-  $('#calUrl').value = state.calUrl;
-  $('#calMsg').textContent = calNote;
   $('#sheetMsg').textContent = sheetNote;
   setDlg.returnValue = '';
   setDlg.showModal();
@@ -1272,45 +1266,7 @@ function mergeCal(day, lines){
   return day.memo !== before;
 }
 /* cal:end */
-let calNext = 0, calBusy = false, calNote = '';
-function setCalNote(t){ calNote = t; $('#calMsg').textContent = t; }
-async function syncCal(force, source){
-  const urls = String(source ?? state.calUrl).split(/\s+/).filter(Boolean);
-  if(DEMO || !linked || !urls.length || calBusy) return;
-  if(!force && (!daysFresh || document.hidden || editing())) return;
-  calBusy = true;
-  calNext = Date.now() + 600000;
-  try{
-    const events = [];
-    for(const url of urls) events.push(...parseIcs((await api({op:'cal', url}, 60000)).ics || ''));
-    const tk = todayKey(), from = parseKey(tk), to = parseKey(shift(tk, 61));
-    const byDay = calLinesByDay(events, from, to);
-    if(!force && editing()){ calBusy = false; calNext = 0; return; }
-    let changed = 0, touched = false;
-    for(let i = 0; i <= 60; i++){
-      const k = shift(tk, i), lines = byDay[k] || [];
-      if(!state.days[k] && !lines.length) continue;
-      const d = day(k), before = canon(d);
-      if(mergeCal(d, lines)) changed++;
-      if(canon(d) !== before) touched = true;
-    }
-    if(touched){ save(); refresh(); }
-    const n = Object.values(byDay).reduce((a, x) => a + x.length, 0);
-    setCalNote(`${new Date().getHours()}:${pad(new Date().getMinutes())} に確認済み（予定 ${n}件、メモを書きかえた日 ${changed}日）`);
-    if(changed) toast(`カレンダーの予定を ${changed}日分 メモに反映しました`);
-    else if(force) toast('カレンダーを確認しました（変更なし）');
-  }catch(e){
-    if(e.code === 'bad_pass' || e.code === 'locked'){ calBusy = false; authFail(e.code); return; }
-    setCalNote(e.code === 'bad_op' ? 'Googleの保存先のコードが古いままです。「Googleに足すコード（カレンダー）」を足して、新しいバージョンで公開し直してください'
-      : e.code === 'bad_url' ? 'URLの形が正しくありません。「iCal形式の非公開URL」（…/basic.ics）を入れてください'
-      : e.code && /^cal_/.test(e.code) ? `カレンダーを読めませんでした（${e.code.slice(4)}）。URLが正しいか確認してください`
-      : e.code === 'server' ? 'Googleの保存先でエラーになりました。外部サービスへの接続を許可したか確認してください'
-      : 'カレンダーを読めませんでした。通信を確認してください');
-    if(force) toast('カレンダーを読めませんでした');
-  }
-  calBusy = false;
-}
-$('#calNow').onclick = () => syncCal(true, $('#calUrl').value.trim());
+/* カレンダーの取り込みは GitHub の自動実行（tools/cal-sync.mjs）が上の関数を使って行う */
 
 /* ---------- デザインの切りかえ ---------- */
 const THEMES = [
@@ -1350,8 +1306,6 @@ setDlg.addEventListener('close', () => {
     .filter(r => r.text);
   const sheet = $('#sheetUrl').value.trim();
   if(sheet !== state.sheet){ state.sheet = sheet; sheetLast = ''; sheetNext = 0; }
-  const cal = $('#calUrl').value.trim().split(/\s+/).filter(Boolean).join('\n');
-  if(cal !== state.calUrl){ state.calUrl = cal; calNext = 0; }
   save(); fillTable(); toast('保存しました');
   genRepeats();
 });
@@ -1486,7 +1440,6 @@ setInterval(() => {
   carryOver();
   genRepeats();
   if(Date.now() >= sheetNext) syncSheet();
-  if(Date.now() >= calNext) syncCal();
 }, 10000);
 
 go(cur);

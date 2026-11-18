@@ -1,0 +1,21 @@
+name: カレンダー同期
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # 30分おき（GitHubの混み具合で数分〜十数分遅れることがある）
+  workflow_dispatch:          # Actions の画面から「Run workflow」で今すぐ実行
+permissions:
+  contents: read
+concurrency:
+  group: calendar
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: node tools/cal-sync.mjs
+        env:
+          TZ: Asia/Tokyo
+          CAL_URL: ${{ secrets.CAL_URL }}
+          BOARD_PASS: ${{ secrets.BOARD_PASS }}
